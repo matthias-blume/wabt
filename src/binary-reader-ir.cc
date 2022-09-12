@@ -158,6 +158,7 @@ class BinaryReaderIR : public BinaryReaderNop {
 
   Result OnStartFunction(Index func_index) override;
 
+  Result BeginCodeSection(Offset size) override;
   Result OnFunctionBodyCount(Index count) override;
   Result BeginFunctionBody(Index index, Offset size) override;
   Result OnLocalDecl(Index decl_index, Index count, Type type) override;
@@ -309,6 +310,11 @@ class BinaryReaderIR : public BinaryReaderNop {
   Result OnNameEntry(NameSectionSubsection type,
                      Index index,
                      std::string_view name) override;
+
+  Result OnReloc(RelocType type,
+                 Offset offset,
+                 Index index,
+                 uint32_t addend) override;
 
   Result BeginTagSection(Offset size) override { return Result::Ok; }
   Result OnTagCount(Index count) override { return Result::Ok; }
@@ -709,6 +715,11 @@ Result BinaryReaderIR::OnExport(Index index,
 Result BinaryReaderIR::OnStartFunction(Index func_index) {
   Var start(func_index, GetLocation());
   module_->AppendField(MakeUnique<StartModuleField>(start, GetLocation()));
+  return Result::Ok;
+}
+
+Result BinaryReaderIR::BeginCodeSection(Offset size) {
+  module_->code_section_base_ = GetLocation().offset;
   return Result::Ok;
 }
 
@@ -1520,6 +1531,21 @@ Result BinaryReaderIR::OnNameEntry(NameSectionSubsection type,
   return Result::Ok;
 }
 
+Result BinaryReaderIR::OnReloc(RelocType type,
+                               Offset offset,
+                               Index index,
+                               uint32_t addend) {
+  switch (type) {
+    case RelocType::TableIndexSLEB:
+    case RelocType::TableIndexSLEB64:
+      module_->function_pointer_load_operand_offsets_.insert(offset);
+      break;
+    default:
+      break;
+  }
+  return Result::Ok;
+}
+
 Result BinaryReaderIR::OnLocalNameLocalCount(Index index, Index count) {
   assert(index < module_->funcs.size());
   Func* func = module_->funcs[index];
@@ -1670,7 +1696,7 @@ Result BinaryReaderIR::OnTableSymbol(Index index,
                                      uint32_t flags,
                                      std::string_view name,
                                      Index table_index) {
-  return SetTableName(index, name);
+  return SetTableName(table_index, name);
 }
 
 }  // end anonymous namespace

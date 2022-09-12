@@ -24,6 +24,7 @@
 #include <string>
 #include <string_view>
 #include <type_traits>
+#include <unordered_set>
 #include <vector>
 
 #include "src/binding-hash.h"
@@ -1197,6 +1198,13 @@ struct Module {
   BindingHash memory_bindings;
   BindingHash data_segment_bindings;
   BindingHash elem_segment_bindings;
+
+  Offset code_section_base_;
+  // Offsets of the operands of i32.const instructions that correspond to taking
+  // the address of a function.  These are relative to the beginning of the CODE
+  // section, after that section's identifier.  In other words, these are the
+  // same values that are stored in the reloc.CODE section.
+  std::unordered_set<Offset> function_pointer_load_operand_offsets_;
 };
 
 enum class ScriptModuleType {
