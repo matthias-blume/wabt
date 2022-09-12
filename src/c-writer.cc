@@ -136,9 +136,13 @@ struct CloseBrace {};
 
 int GetShiftMask(Type type) {
   switch (type) {
-    case Type::I32: return 31;
-    case Type::I64: return 63;
-    default: WABT_UNREACHABLE; return 0;
+    case Type::I32:
+      return 31;
+    case Type::I64:
+      return 63;
+    default:
+      WABT_UNREACHABLE;
+      return 0;
   }
 }
 
@@ -830,8 +834,12 @@ void CWriter::Write(TypeEnum type) {
 
 void CWriter::Write(SignedType type) {
   switch (type.type) {
-    case Type::I32: Write("s32"); break;
-    case Type::I64: Write("s64"); break;
+    case Type::I32:
+      Write("s32");
+      break;
+    case Type::I64:
+      Write("s64");
+      break;
     default:
       WABT_UNREACHABLE;
   }
@@ -2411,8 +2419,22 @@ void CWriter::Write(const ExprList& exprs) {
 
       case ExprType::Const: {
         const Const& const_ = cast<ConstExpr>(&expr)->const_;
+        bool is64bit = const_.type() == Type::I64;
+        int index_byte_length = is64bit ? 10 : 5;
+        Offset operand_reloc_offset =
+            expr.loc.offset - index_byte_length - module_->code_section_base_;
+        auto& offsets = module_->function_pointer_load_operand_offsets_;
         PushType(const_.type());
-        Write(StackVar(0), " = ", const_, ";", Newline());
+        if (options_.no_sandbox &&
+            offsets.find(operand_reloc_offset) != offsets.end()) {
+          uint64_t const_val =
+              const_.type() == Type::I64 ? const_.u64() : const_.u32();
+          std::string& func_name = module_->funcs[const_val]->name;
+          Write(StackVar(0), " = reinterpret_cast<u", is64bit ? "64" : "32",
+                ">(&", GlobalName(func_name), ");", Newline());
+        } else {
+          Write(StackVar(0), " = ", const_, ";", Newline());
+        }
         break;
       }
 
@@ -3252,20 +3274,48 @@ void CWriter::Write(const ConvertExpr& expr) {
 void CWriter::Write(const LoadExpr& expr) {
   const char* func = nullptr;
   switch (expr.opcode) {
-    case Opcode::I32Load: func = "i32_load"; break;
-    case Opcode::I64Load: func = "i64_load"; break;
-    case Opcode::F32Load: func = "f32_load"; break;
-    case Opcode::F64Load: func = "f64_load"; break;
-    case Opcode::I32Load8S: func = "i32_load8_s"; break;
-    case Opcode::I64Load8S: func = "i64_load8_s"; break;
-    case Opcode::I32Load8U: func = "i32_load8_u"; break;
-    case Opcode::I64Load8U: func = "i64_load8_u"; break;
-    case Opcode::I32Load16S: func = "i32_load16_s"; break;
-    case Opcode::I64Load16S: func = "i64_load16_s"; break;
-    case Opcode::I32Load16U: func = "i32_load16_u"; break;
-    case Opcode::I64Load16U: func = "i64_load16_u"; break;
-    case Opcode::I64Load32S: func = "i64_load32_s"; break;
-    case Opcode::I64Load32U: func = "i64_load32_u"; break;
+    case Opcode::I32Load:
+      func = "i32_load";
+      break;
+    case Opcode::I64Load:
+      func = "i64_load";
+      break;
+    case Opcode::F32Load:
+      func = "f32_load";
+      break;
+    case Opcode::F64Load:
+      func = "f64_load";
+      break;
+    case Opcode::I32Load8S:
+      func = "i32_load8_s";
+      break;
+    case Opcode::I64Load8S:
+      func = "i64_load8_s";
+      break;
+    case Opcode::I32Load8U:
+      func = "i32_load8_u";
+      break;
+    case Opcode::I64Load8U:
+      func = "i64_load8_u";
+      break;
+    case Opcode::I32Load16S:
+      func = "i32_load16_s";
+      break;
+    case Opcode::I64Load16S:
+      func = "i64_load16_s";
+      break;
+    case Opcode::I32Load16U:
+      func = "i32_load16_u";
+      break;
+    case Opcode::I64Load16U:
+      func = "i64_load16_u";
+      break;
+    case Opcode::I64Load32S:
+      func = "i64_load32_s";
+      break;
+    case Opcode::I64Load32U:
+      func = "i64_load32_u";
+      break;
 
     default:
       WABT_UNREACHABLE;
@@ -3286,15 +3336,33 @@ void CWriter::Write(const LoadExpr& expr) {
 void CWriter::Write(const StoreExpr& expr) {
   const char* func = nullptr;
   switch (expr.opcode) {
-    case Opcode::I32Store: func = "i32_store"; break;
-    case Opcode::I64Store: func = "i64_store"; break;
-    case Opcode::F32Store: func = "f32_store"; break;
-    case Opcode::F64Store: func = "f64_store"; break;
-    case Opcode::I32Store8: func = "i32_store8"; break;
-    case Opcode::I64Store8: func = "i64_store8"; break;
-    case Opcode::I32Store16: func = "i32_store16"; break;
-    case Opcode::I64Store16: func = "i64_store16"; break;
-    case Opcode::I64Store32: func = "i64_store32"; break;
+    case Opcode::I32Store:
+      func = "i32_store";
+      break;
+    case Opcode::I64Store:
+      func = "i64_store";
+      break;
+    case Opcode::F32Store:
+      func = "f32_store";
+      break;
+    case Opcode::F64Store:
+      func = "f64_store";
+      break;
+    case Opcode::I32Store8:
+      func = "i32_store8";
+      break;
+    case Opcode::I64Store8:
+      func = "i64_store8";
+      break;
+    case Opcode::I32Store16:
+      func = "i32_store16";
+      break;
+    case Opcode::I64Store16:
+      func = "i64_store16";
+      break;
+    case Opcode::I64Store32:
+      func = "i64_store32";
+      break;
 
     default:
       WABT_UNREACHABLE;

@@ -22,6 +22,7 @@
 #include <cstdint>
 #include <cstdio>
 #include <deque>
+#include <unordered_set>
 #include <vector>
 
 #include "wabt/binary-reader-nop.h"
@@ -158,6 +159,7 @@ class BinaryReaderIR : public BinaryReaderNop {
 
   Result OnStartFunction(Index func_index) override;
 
+  Result BeginCodeSection(Offset size) override;
   Result OnFunctionBodyCount(Index count) override;
   Result BeginFunctionBody(Index index, Offset size) override;
   Result OnLocalDecl(Index decl_index, Index count, Type type) override;
@@ -310,6 +312,11 @@ class BinaryReaderIR : public BinaryReaderNop {
                      Index index,
                      std::string_view name) override;
 
+  Result OnReloc(RelocType type,
+                 Offset offset,
+                 Index index,
+                 uint32_t addend) override;
+
   Result BeginTagSection(Offset size) override { return Result::Ok; }
   Result OnTagCount(Index count) override { return Result::Ok; }
   Result OnTagType(Index index, Index sig_index) override;
@@ -384,6 +391,8 @@ class BinaryReaderIR : public BinaryReaderNop {
 
   CodeMetadataExprQueue code_metadata_queue_;
   std::string_view current_metadata_name_;
+
+  std::unordered_set<Offset> function_pointer_loads_;
 };
 
 BinaryReaderIR::BinaryReaderIR(Module* out_module,
@@ -710,6 +719,11 @@ Result BinaryReaderIR::OnExport(Index index,
 Result BinaryReaderIR::OnStartFunction(Index func_index) {
   Var start(func_index, GetLocation());
   module_->AppendField(MakeUnique<StartModuleField>(start, GetLocation()));
+  return Result::Ok;
+}
+
+Result BinaryReaderIR::BeginCodeSection(Offset size) {
+  module_->code_section_base_ = GetLocation().offset;
   return Result::Ok;
 }
 
@@ -1534,6 +1548,21 @@ Result BinaryReaderIR::OnNameEntry(NameSectionSubsection type,
       break;
     case NameSectionSubsection::ElemSegment:
       SetElemSegmentName(index, name);
+      break;
+  }
+  return Result::Ok;
+}
+
+Result BinaryReaderIR::OnReloc(RelocType type,
+                               Offset offset,
+                               Index index,
+                               uint32_t addend) {
+  switch (type) {
+    case RelocType::TableIndexSLEB:
+    case RelocType::TableIndexSLEB64:
+      module_->function_pointer_load_operand_offsets_.insert(offset);
+      break;
+    default:
       break;
   }
   return Result::Ok;
