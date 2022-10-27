@@ -266,12 +266,14 @@ class CWriter {
   void WriteTags();
   void ComputeUniqueImports();
   void BeginInstance();
+  void WriteImportsNoSandbox();
   void WriteImports();
   void WriteFuncDeclarations();
   void WriteFuncDeclaration(const FuncDeclaration&, const std::string&);
   void WriteImportFuncDeclaration(const FuncDeclaration&,
                                   const std::string& module_name,
-                                  const std::string&);
+                                  const std::string& name,
+                                  bool write_instance_param = true);
   void WriteCallIndirectFuncDeclaration(const FuncDeclaration&,
                                         const std::string&);
   void WriteModuleInstance();
@@ -578,7 +580,12 @@ std::string_view StripLeadingDollar(std::string_view name) {
 std::string CWriter::DefineImportName(const std::string& name,
                                       std::string_view module,
                                       std::string_view field_name) {
-  std::string mangled = MangleName(module) + MangleName(field_name);
+  std::string mangled;
+  if (options_.no_sandbox && module == "env") {
+    mangled = field_name;
+  } else {
+    mangled = MangleName(module) + MangleName(field_name);
+  }
   import_syms_.insert(name);
   global_syms_.insert(mangled);
   global_sym_map_.insert(SymbolMap::value_type(name, mangled));
@@ -1266,6 +1273,37 @@ void CWriter::BeginInstance() {
 }
 
 // Write module-wide imports (funcs & tags), which aren't tied to an instance.
+void CWriter::WriteImportsNoSandbox() {
+  if (module_->imports.empty())
+    return;
+
+  Write(Newline());
+
+  for (const Import* import : unique_imports_) {
+    if (import->kind() == ExternalKind::Func) {
+      Write("/* import: '", import->module_name, "' '", import->field_name,
+            "' */", Newline());
+      const Func& func = cast<FuncImport>(import)->func;
+      if (import->module_name == "env") {
+        WriteImportFuncDeclaration(func.decl, import->module_name,
+                                   import->field_name, false);
+      } else {
+        WriteImportFuncDeclaration(
+            func.decl, import->module_name,
+            MangleName(import->module_name) + MangleName(import->field_name));
+      }
+      Write(";");
+      Write(Newline());
+    } else if (import->kind() == ExternalKind::Tag) {
+      Write("/* import: '", import->module_name, "' '", import->field_name,
+            "' */", Newline());
+      Write("extern const u32 *", MangleName(import->module_name),
+            MangleName(import->field_name), ";", Newline());
+    }
+  }
+}
+
+// Write module-wide imports (funcs & tags), which aren't tied to an instance.
 void CWriter::WriteImports() {
   if (module_->imports.empty())
     return;
@@ -1319,10 +1357,20 @@ void CWriter::WriteFuncDeclaration(const FuncDeclaration& decl,
 
 void CWriter::WriteImportFuncDeclaration(const FuncDeclaration& decl,
                                          const std::string& module_name,
-                                         const std::string& name) {
+                                         const std::string& name,
+                                         bool write_instance_param) {
   Write(ResultType(decl.sig.result_types), " ", name, "(");
-  Write("struct ", MangleModuleInstanceTypeName(module_name), "*");
-  WriteParamTypes(decl);
+  if (write_instance_param) {
+    Write("struct ", MangleModuleInstanceTypeName(module_name), "*");
+    if (decl.GetNumParams() > 0) {
+      Write(", ");
+    }
+  }
+  for (Index i = 0; i < decl.GetNumParams(); ++i) {
+    if (i > 0)
+      Write(", ");
+    Write(decl.GetParamType(i));
+  }
   Write(")");
 }
 
@@ -2340,13 +2388,20 @@ void CWriter::Write(const ExprList& exprs) {
         Write(GlobalVar(var), "(");
         bool is_import = import_module_sym_map_.count(func.name) != 0;
         if (is_import) {
-          Write("instance->",
-                MangleModuleInstanceName(import_module_sym_map_[func.name]));
+          const auto& module_name = import_module_sym_map_.at(func.name);
+          if (module_name != "env") {
+            Write("instance->", MangleModuleInstanceName(module_name));
+            if (num_params != 0)
+              Write(", ");
+          }
         } else {
           Write("instance");
+          if (num_params != 0)
+            Write(", ");
         }
         for (Index i = 0; i < num_params; ++i) {
-          Write(", ");
+          if (i != 0)
+            Write(", ");
           Write(StackVar(num_params - i - 1));
         }
         Write(");", Newline());
@@ -3582,7 +3637,11 @@ void CWriter::WriteCHeader() {
   WriteInitDecl();
   WriteFreeDecl();
   WriteMultivalueTypes();
-  WriteImports();
+  if (options_.no_sandbox) {
+    WriteImportsNoSandbox();
+  } else {
+    WriteImports();
+  }
   WriteExports(WriteExportsKind::Declarations);
   Write(s_header_bottom);
   Write(Newline(), "#endif  /* ", guard, " */", Newline());
