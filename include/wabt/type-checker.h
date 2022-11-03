@@ -99,7 +99,7 @@ class TypeChecker {
   Result OnLocalSet(Type);
   Result OnLocalTee(Type);
   Result OnLoop(const TypeVector& param_types, const TypeVector& result_types);
-  Result OnMemoryCopy(const Limits& limits);
+  Result OnMemoryCopy(const Limits& srclimits, const Limits& dstlimits);
   Result OnDataDrop(Index);
   Result OnMemoryFill(const Limits& limits);
   Result OnMemoryGrow(const Limits& limits);
@@ -171,9 +171,7 @@ class TypeChecker {
                            Type expected2,
                            Type expected3,
                            const char* desc);
-  Result CheckOpcode1(Opcode opcode,
-                      const Limits* limits = nullptr,
-                      bool has_address_operands = false);
+  Result CheckOpcode1(Opcode opcode, const Limits* limits = nullptr);
   Result CheckOpcode2(Opcode opcode, const Limits* limits = nullptr);
   Result CheckOpcode3(Opcode opcode,
                       const Limits* limits1 = nullptr,
