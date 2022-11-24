@@ -167,7 +167,6 @@ class CWriter {
 
   size_t MarkTypeStack() const;
   void ResetTypeStack(size_t mark);
-  bool SkipImport(const Import* import) const;
   Type StackType(Index) const;
   void PushType(Type);
   void PushTypes(const TypeVector&);
@@ -361,13 +360,9 @@ class CWriter {
 
   std::vector<std::pair<std::string, MemoryStream>> func_sections_;
   SymbolSet func_includes_;
-  std::string current_stack_ptr_var_name_;
 };
 
 constexpr std::string_view kImplicitFuncLabel = "$Bfunc";
-constexpr std::string_view kEnvModuleName = "env";
-constexpr std::string_view kStackPointerName = "$__stack_pointer";
-constexpr std::string_view kStackPointerNameWithoutDollar = "__stack_pointer";
 
 size_t CWriter::MarkTypeStack() const {
   return type_stack_.size();
@@ -1084,18 +1079,10 @@ void CWriter::WriteTags() {
   Write(CloseBrace(), Newline());
 }
 
-bool CWriter::SkipImport(const Import* import) const {
-  return options_.no_sandbox && import->module_name == kEnvModuleName &&
-         import->field_name == kStackPointerNameWithoutDollar;
-}
-
 void CWriter::ComputeUniqueImports() {
   using modname_name_pair = std::pair<std::string, std::string>;
   std::map<modname_name_pair, const Import*> import_map;
   for (const Import* import : module_->imports) {
-    if (SkipImport(import)) {
-      continue;
-    }
     // After emplacing, the returned bool says whether the insert happened;
     // i.e., was there already an import with the same modname and name?
     // If there was, make sure it was at least the same kind of import.
@@ -1121,18 +1108,15 @@ void CWriter::ComputeUniqueImports() {
 }
 
 void CWriter::BeginInstance() {
-  ComputeUniqueImports();
-
-  if (unique_imports_.empty()) {
+  if (module_->imports.empty()) {
     Write("typedef struct ", ModuleInstanceTypeName(), " ", OpenBrace());
     return;
   }
 
+  ComputeUniqueImports();
+
   // define names of per-instance imports
   for (const Import* import : module_->imports) {
-    if (SkipImport(import)) {
-      continue;
-    }
     switch (import->kind()) {
       case ExternalKind::Func: {
         const Func& func = cast<FuncImport>(import)->func;
@@ -1223,13 +1207,6 @@ void CWriter::BeginInstance() {
     Write("/* import: '", import->module_name, "' '", import->field_name,
           "' */", Newline());
 
-    if (options_.no_sandbox && import->kind() == ExternalKind::Global &&
-        import->field_name == kStackPointerName) {
-      Write("/* ", kStackPointerName, " is ignored in no_sandbox mode */",
-            Newline());
-      continue;
-    }
-
     switch (import->kind()) {
       case ExternalKind::Global:
         WriteGlobal(cast<GlobalImport>(import)->global,
@@ -1259,7 +1236,7 @@ void CWriter::BeginInstance() {
 
 // Write module-wide imports (funcs & tags), which aren't tied to an instance.
 void CWriter::WriteImportsNoSandbox() {
-  if (unique_imports_.empty())
+  if (module_->imports.empty())
     return;
 
   Write(Newline());
@@ -1290,7 +1267,7 @@ void CWriter::WriteImportsNoSandbox() {
 
 // Write module-wide imports (funcs & tags), which aren't tied to an instance.
 void CWriter::WriteImports() {
-  if (unique_imports_.empty())
+  if (module_->imports.empty())
     return;
 
   Write(Newline());
@@ -1826,7 +1803,7 @@ void CWriter::WriteInit() {
   Write("assert(wasm_rt_is_initialized());", Newline());
   Write("assert(s_module_initialized);", Newline());
 
-  if (!import_module_set_.empty()) {
+  if (!module_->imports.empty()) {
     Write("init_instance_import(instance");
     for (auto import_module_name : import_module_set_) {
       Write(", ", MangleModuleInstanceName(import_module_name));
@@ -1868,7 +1845,7 @@ void CWriter::WriteInit() {
 }
 
 void CWriter::WriteInitInstanceImport() {
-  if (import_module_set_.empty())
+  if (module_->imports.empty())
     return;
 
   Write(Newline(), "static void init_instance_import(",
@@ -1963,7 +1940,6 @@ void CWriter::Write(const Func& func) {
   stack_var_sym_map_.clear();
   func_sections_.clear();
   func_includes_.clear();
-  current_stack_ptr_var_name_.clear();
 
   Write("static ", ResultType(func.decl.sig.result_types), " ",
         GlobalName(func.name), "(");
@@ -2490,57 +2466,15 @@ void CWriter::Write(const ExprList& exprs) {
 
       case ExprType::GlobalGet: {
         const Var& var = cast<GlobalGetExpr>(&expr)->var;
-        if (options_.no_sandbox && var.name() == kStackPointerName) {
-          // Since __builtin_alloca(0) still allocates 16bytes second access to
-          // __stack_pointer needs to access current_stack_ptr_var_name_ without
-          // call to alloca.
-          if (current_stack_ptr_var_name_.empty()) {
-            current_stack_ptr_var_name_ =
-                DefineLocalScopeName(kStackPointerName);
-            Write(module_->GetGlobal(var)->type, " ",
-                  current_stack_ptr_var_name_, " = (",
-                  module_->GetGlobal(var)->type, ")__builtin_alloca(0);",
-                  Newline());
-          }
-          PushType(module_->GetGlobal(var)->type);
-          Write(StackVar(0), " = ", current_stack_ptr_var_name_, ";",
-                Newline());
-        } else {
-          PushType(module_->GetGlobal(var)->type);
-          Write(StackVar(0), " = ", GlobalInstanceVar(var), ";", Newline());
-        }
+        PushType(module_->GetGlobal(var)->type);
+        Write(StackVar(0), " = ", GlobalInstanceVar(var), ";", Newline());
         break;
       }
 
       case ExprType::GlobalSet: {
         const Var& var = cast<GlobalSetExpr>(&expr)->var;
-        if (options_.no_sandbox && var.name() == kStackPointerName) {
-          // At this point current_stack_pointer variable name shouldn't be
-          // empty.
-          assert(!current_stack_ptr_var_name_.empty());
-          Write("if (", StackVar(0), " < ", current_stack_ptr_var_name_, ") ",
-                OpenBrace());
-          Write(StackType(0), " sp = (", StackType(0), ")__builtin_alloca(",
-                current_stack_ptr_var_name_, " - ", StackVar(0), ");",
-                Newline());
-          // TODO: Do we want CHECK_EQ/NE/... in wasm-rt.h?
-          Write("if (UNLIKELY(sp != ", StackVar(0), ")) ", OpenBrace());
-          Write("TRAP(OOB);", Newline());
-          Write(CloseBrace(), Newline());
-          // Update current stack pointer. We intentionally do not update it
-          // if there was no alloca call, since we need it to always point on
-          // the top of the actual stack. This might lead to the situation when
-          // after "deallocation" the code allocates again - in which case this
-          // code will not reuse already allocated space on the stack. If such
-          // situation occurs it can be addressed by keeping track of allocated
-          // space as well as the current stack pointer.
-          Write(current_stack_ptr_var_name_, " = sp;", Newline());
-          Write(CloseBrace(), Newline());
-          DropTypes(1);
-        } else {
-          Write(GlobalInstanceVar(var), " = ", StackVar(0), ";", Newline());
-          DropTypes(1);
-        }
+        Write(GlobalInstanceVar(var), " = ", StackVar(0), ";", Newline());
+        DropTypes(1);
         break;
       }
 
